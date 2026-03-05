@@ -292,6 +292,27 @@ async def get_chat_state(ub_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class AddFilesRequest(BaseModel):
+    files: list
+
+
+@app.post("/chat/{ub_id}/add_files")
+async def add_files_to_last_answer(ub_id: int, request: AddFilesRequest):
+    try:
+        workflow_state = await xano.get_workflow_state(ub_id)
+        if not workflow_state:
+            raise HTTPException(status_code=404, detail="No workflow state found")
+        if not workflow_state.answers:
+            raise HTTPException(status_code=404, detail="No answers found")
+        workflow_state.answers[-1]["user_files"] = request.files
+        await xano.save_workflow_state(workflow_state)
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class ChatKitSessionRequest(BaseModel):
     workflow_id: str
     user_id: str = "anonymous"
