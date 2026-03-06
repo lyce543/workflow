@@ -100,7 +100,6 @@ include_all_children: {ctx.include_all_children}
         )
 
     async def _build_input(self, user_message: str, user_files: List[Dict]) -> Any:
-        IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
         content = [{"type": "input_text", "text": user_message}] if user_message else []
         async with httpx.AsyncClient(timeout=30.0) as client:
             for f in user_files:
@@ -108,7 +107,8 @@ include_all_children: {ctx.include_all_children}
                 mime = f.get("type", "")
                 name = f.get("name", "file")
                 file_data = f.get("file_data", "")
-                if mime in IMAGE_TYPES:
+                is_image = mime.startswith("image/") or file_data.startswith("data:image/")
+                if is_image:
                     content.append({"type": "input_image", "image_url": file_data or url})
                 else:
                     if file_data:
