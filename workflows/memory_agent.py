@@ -107,16 +107,23 @@ include_all_children: {ctx.include_all_children}
                 url = f.get("url", "")
                 mime = f.get("type", "")
                 name = f.get("name", "file")
+                file_data = f.get("file_data", "")
                 if mime in IMAGE_TYPES:
-                    content.append({"type": "input_image", "image_url": url})
+                    if file_data:
+                        content.append({"type": "input_image", "image_url": file_data})
+                    else:
+                        content.append({"type": "input_image", "image_url": url})
                 else:
-                    try:
-                        resp = await client.get(url)
-                        resp.raise_for_status()
-                        encoded = base64.b64encode(resp.content).decode("utf-8")
-                        content.append({"type": "input_file", "filename": name, "file_data": f"data:{mime};base64,{encoded}"})
-                    except Exception as e:
-                        print(f"Could not fetch file {name}: {e}")
+                    if file_data:
+                        content.append({"type": "input_file", "filename": name, "file_data": file_data})
+                    else:
+                        try:
+                            resp = await client.get(url)
+                            resp.raise_for_status()
+                            encoded = base64.b64encode(resp.content).decode("utf-8")
+                            content.append({"type": "input_file", "filename": name, "file_data": f"data:{mime};base64,{encoded}"})
+                        except Exception as e:
+                            print(f"Could not fetch file {name}: {e}")
         return content if len(content) > 1 else user_message
 
     async def run_workflow_stream(
