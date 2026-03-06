@@ -1,5 +1,7 @@
 from typing import Dict, List, Any, AsyncGenerator
 from datetime import datetime
+import base64
+import httpx
 
 from agents import Agent, Runner, ModelSettings, RunContextWrapper, HostedMCPTool, trace
 from openai.types.responses import ResponseTextDeltaEvent
@@ -97,13 +99,34 @@ include_all_children: {ctx.include_all_children}
             )
         )
 
+    async def _build_input(self, user_message: str, user_files: List[Dict]) -> Any:
+        IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+        content = [{"type": "input_text", "text": user_message}] if user_message else []
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for f in user_files:
+                url = f.get("url", "")
+                mime = f.get("type", "")
+                name = f.get("name", "file")
+                if mime in IMAGE_TYPES:
+                    content.append({"type": "input_image", "image_url": url})
+                else:
+                    try:
+                        resp = await client.get(url)
+                        resp.raise_for_status()
+                        encoded = base64.b64encode(resp.content).decode("utf-8")
+                        content.append({"type": "input_file", "filename": name, "file_data": f"data:{mime};base64,{encoded}"})
+                    except Exception as e:
+                        print(f"Could not fetch file {name}: {e}")
+        return content if len(content) > 1 else user_message
+
     async def run_workflow_stream(
         self,
         block: Dict,
         template: Dict,
         user_message: str,
         ub_id: int,
-        xano
+        xano,
+        user_files: List[Dict] = []
     ) -> AsyncGenerator[str, None]:
 
         with trace(f"MemoryAgent-{ub_id}"):
@@ -144,7 +167,8 @@ include_all_children: {ctx.include_all_children}
             model = template.get("model", "gpt-4o")
             agent = self._create_agent(context, model)
 
-            result = Runner.run_streamed(agent, user_message, context=context)
+            agent_input = await self._build_input(user_message, user_files)
+            result = Runner.run_streamed(agent, agent_input, context=context)
 
             full_response = ""
             async for event in result.stream_events():

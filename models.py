@@ -12,6 +12,7 @@ class ChatStatus(str, Enum):
 class StudentMessage(BaseModel):
     ub_id: int
     content: str
+    files: list = []
 
 
 class AssistantResponse(BaseModel):

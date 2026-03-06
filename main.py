@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 from models import StudentMessage, AssistantResponse, ChatStatus
 from xano_client import XanoClient
-from workflows import get_workflow_class
+from workflows import get_workflow_class, MemoryAgentWorkflow
 from fastapi import UploadFile, File
 
 import tiktoken
@@ -122,7 +122,11 @@ async def process_student_message(message: StudentMessage):
             print(f"Starting stream for ub_id: {message.ub_id}")
             chunk_count = 0
             
-            async for chunk in workflow.run_workflow_stream(block, template_data, message.content, message.ub_id, xano):
+            if isinstance(workflow, MemoryAgentWorkflow) and message.files:
+                stream = workflow.run_workflow_stream(block, template_data, message.content, message.ub_id, xano, user_files=message.files)
+            else:
+                stream = workflow.run_workflow_stream(block, template_data, message.content, message.ub_id, xano)
+            async for chunk in stream:
                 chunk_count += 1
                 print(f"Chunk {chunk_count}: {chunk[:50]}..." if len(chunk) > 50 else f"Chunk {chunk_count}: {chunk}")
                 full_response += chunk

@@ -18,6 +18,7 @@ __all__ = [
     "AgentBuilderWorkflow",
     "BaseWorkflow",
     "WorkflowContext",
+    "MemoryAgentWorkflow",
 ]
 
 WORKFLOW_REGISTRY = {
@@ -27,6 +28,7 @@ WORKFLOW_REGISTRY = {
     27: RoleplayWorkflow,
     28: ReflectionWorkflow,
     29: AnalogousWorkflow,
+    33: MemoryAgentWorkflow,
 }
 
 def get_workflow_class(template_id: int):
