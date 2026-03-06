@@ -6,6 +6,7 @@ from .analogous import AnalogousWorkflow
 from .reflection import ReflectionWorkflow
 from .agent_builder import AgentBuilderWorkflow
 from .base import BaseWorkflow, WorkflowContext
+from .memory_agent import MemoryAgentWorkflow
 
 __all__ = [
     "ExaminationWorkflow",
