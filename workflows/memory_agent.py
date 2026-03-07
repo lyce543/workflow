@@ -102,18 +102,33 @@ include_all_children: {ctx.include_all_children}
     async def _build_input(self, user_message: str, user_files: List[Dict], conversation_history: List[Dict] = []) -> Any:
         content = []
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Add images from previous turns
+            # Add files from previous turns
             for turn in conversation_history:
                 for f in turn.get("user_files", []):
                     file_data = f.get("file_data", "") or ""
                     mime = f.get("type", "") or ""
                     url = f.get("url", "") or ""
+                    name = f.get("name", "file")
+                    turn_label = turn.get("turn", "?")
                     is_image = mime.startswith("image/") or file_data.startswith("data:image/")
                     if is_image:
                         image_url = file_data or url
                         if image_url:
-                            content.append({"type": "input_text", "text": f"[Image from turn {turn.get('turn', '?')}:]"})
+                            content.append({"type": "input_text", "text": f"[Image from turn {turn_label}:]"})
                             content.append({"type": "input_image", "image_url": image_url})
+                    else:
+                        if file_data:
+                            content.append({"type": "input_text", "text": f"[File from turn {turn_label}: {name}]"})
+                            content.append({"type": "input_file", "filename": name, "file_data": file_data})
+                        elif url:
+                            try:
+                                resp = await client.get(url)
+                                resp.raise_for_status()
+                                encoded = base64.b64encode(resp.content).decode("utf-8")
+                                content.append({"type": "input_text", "text": f"[File from turn {turn_label}: {name}]"})
+                                content.append({"type": "input_file", "filename": name, "file_data": f"data:{mime};base64,{encoded}"})
+                            except Exception as e:
+                                print(f"Could not fetch historical file {name}: {e}")
 
             # Add current message text
             if user_message:
