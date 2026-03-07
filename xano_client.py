@@ -60,6 +60,10 @@ class XanoClient:
             print(f"Error loading workflow state: {e}")
         return None
     
+    async def delete_workflow_state(self, ub_id: int):
+        response = await self.client.delete(f"{self.base_url}/workflow_state/{ub_id}")
+        return response.status_code in [200, 204]
+
     async def save_workflow_state(self, state: WorkflowState):
         data = {
             "ub_id": state.ub_id,

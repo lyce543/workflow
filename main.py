@@ -296,6 +296,20 @@ async def get_chat_state(ub_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/chat/{ub_id}/state")
+async def delete_chat_state(ub_id: int):
+    try:
+        success = await xano.delete_workflow_state(ub_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Workflow state not found or could not be deleted")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error deleting chat state: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class AddFilesRequest(BaseModel):
     files: list
 
