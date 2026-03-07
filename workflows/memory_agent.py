@@ -26,6 +26,7 @@ class MemoryAgentContext:
         writing_instructions: str,
         agent_instructions: str,
         agent_specifications: str,
+        conversation_history: List[Dict[str, Any]]
     ):
         self.course_id = course_id
         self.lesson_id = lesson_id
@@ -37,6 +38,7 @@ class MemoryAgentContext:
         self.writing_instructions = writing_instructions
         self.agent_instructions = agent_instructions
         self.agent_specifications = agent_specifications
+        self.conversation_history = conversation_history
 
 
 class MemoryAgentWorkflow(BaseWorkflow):
@@ -56,6 +58,14 @@ class MemoryAgentWorkflow(BaseWorkflow):
         def agent_instructions(run_context: RunContextWrapper[MemoryAgentContext], _agent: Agent):
             ctx = run_context.context
 
+            conversation_history = ""
+            if ctx.conversation_history:
+                conversation_history = "\n\n# CONVERSATION HISTORY:\n"
+                for i, turn in enumerate(ctx.conversation_history, 1):
+                    conversation_history += f"\nTurn {i}:\n"
+                    conversation_history += f"Student: {turn.get('user_message', '')}\n"
+                    conversation_history += f"You: {turn.get('agent_response', '')}\n"
+
             return f"""Use these inputs when calling the MCP server:
 course_id: {ctx.course_id}
 lesson_id: {ctx.lesson_id}
@@ -74,7 +84,9 @@ include_all_children: {ctx.include_all_children}
 {ctx.agent_instructions}
 
 # Specifications
-{ctx.agent_specifications}"""
+{ctx.agent_specifications}
+
+{conversation_history}"""
 
         return Agent[MemoryAgentContext](
             name="MemoryAgent",
@@ -87,52 +99,50 @@ include_all_children: {ctx.include_all_children}
             )
         )
 
-    async def _process_files(self, files: List[Dict], client: httpx.AsyncClient) -> List[Dict]:
+    async def _build_input(self, user_message: str, user_files: List[Dict], conversation_history: List[Dict] = []) -> Any:
         content = []
-        for f in files:
-            url = f.get("url", "")
-            mime = f.get("type", "")
-            name = f.get("name", "file")
-            file_data = f.get("file_data", "")
-            is_image = mime.startswith("image/") or file_data.startswith("data:image/")
-            if is_image:
-                image_url = file_data or url
-                if image_url:
-                    content.append({"type": "input_image", "image_url": image_url})
-            else:
-                if file_data:
-                    content.append({"type": "input_file", "filename": name, "file_data": file_data})
-                elif url:
-                    try:
-                        resp = await client.get(url)
-                        resp.raise_for_status()
-                        encoded = base64.b64encode(resp.content).decode("utf-8")
-                        content.append({"type": "input_file", "filename": name, "file_data": f"data:{mime};base64,{encoded}"})
-                    except Exception as e:
-                        print(f"Could not fetch file {name}: {e}")
-        return content
-
-    async def _build_full_input(self, conversation_history: List[Dict], user_message: str, user_files: List[Dict]) -> Any:
-        messages = []
         async with httpx.AsyncClient(timeout=30.0) as client:
+            # Add images from previous turns
             for turn in conversation_history:
-                user_content = []
-                if turn.get("user_message"):
-                    user_content.append({"type": "input_text", "text": turn["user_message"]})
-                user_content += await self._process_files(turn.get("user_files", []), client)
-                if user_content:
-                    messages.append({"role": "user", "content": user_content})
-                if turn.get("agent_response"):
-                    messages.append({"role": "assistant", "content": turn["agent_response"]})
+                for f in turn.get("user_files", []):
+                    file_data = f.get("file_data", "")
+                    mime = f.get("type", "")
+                    url = f.get("url", "")
+                    is_image = mime.startswith("image/") or file_data.startswith("data:image/")
+                    if is_image:
+                        image_url = file_data or url
+                        if image_url:
+                            content.append({"type": "input_text", "text": f"[Image from turn {turn.get('turn', '?')}:]"})
+                            content.append({"type": "input_image", "image_url": image_url})
 
-            current_content = []
+            # Add current message text
             if user_message:
-                current_content.append({"type": "input_text", "text": user_message})
-            current_content += await self._process_files(user_files, client)
-            if current_content:
-                messages.append({"role": "user", "content": current_content})
+                content.append({"type": "input_text", "text": user_message})
 
-        return messages if messages else user_message
+            # Add current files
+            for f in user_files:
+                url = f.get("url", "")
+                mime = f.get("type", "")
+                name = f.get("name", "file")
+                file_data = f.get("file_data", "")
+                is_image = mime.startswith("image/") or file_data.startswith("data:image/")
+                if is_image:
+                    content.append({"type": "input_image", "image_url": file_data or url})
+                else:
+                    if file_data:
+                        content.append({"type": "input_file", "filename": name, "file_data": file_data})
+                    else:
+                        try:
+                            resp = await client.get(url)
+                            resp.raise_for_status()
+                            encoded = base64.b64encode(resp.content).decode("utf-8")
+                            content.append({"type": "input_file", "filename": name, "file_data": f"data:{mime};base64,{encoded}"})
+                        except Exception as e:
+                            print(f"Could not fetch file {name}: {e}")
+
+        if len(content) > 1:
+            return [{"role": "user", "content": content}]
+        return user_message
 
     async def run_workflow_stream(
         self,
@@ -176,12 +186,13 @@ include_all_children: {ctx.include_all_children}
                 writing_instructions=specs.get("writing_user_data_instructions", "When the user mentions a fact about themselves, write it on course level."),
                 agent_instructions=block.get("int_instructions", "You are a helpful agent."),
                 agent_specifications=specs.get("agent_specifications", ""),
+                conversation_history=state.answers
             )
 
             model = template.get("model", "gpt-4o")
             agent = self._create_agent(context, model)
 
-            agent_input = await self._build_full_input(state.answers, user_message, user_files)
+            agent_input = await self._build_input(user_message, user_files, state.answers)
             result = Runner.run_streamed(agent, agent_input, context=context)
 
             full_response = ""
@@ -194,7 +205,6 @@ include_all_children: {ctx.include_all_children}
             state.answers.append({
                 "turn": len(state.answers) + 1,
                 "user_message": user_message,
-                "user_files": user_files,
                 "agent_response": full_response,
                 "timestamp": datetime.now().isoformat()
             })
