@@ -47,7 +47,6 @@ class MemoryAgentWorkflow(BaseWorkflow):
         return HostedMCPTool(tool_config={
             "type": "mcp",
             "server_label": "user_data",
-            "allowed_tools": ["get_user_data", "write_user_data"],
             "require_approval": "never",
             "server_url": MCP_SERVER_URL
         })
