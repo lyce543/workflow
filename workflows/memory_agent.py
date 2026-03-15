@@ -232,4 +232,86 @@ include_all_children: {ctx.include_all_children}
         criteria: List[Dict[str, Any]],
         model: str
     ) -> str:
-        return ""
+        with trace(f"MemoryAgentEval-{ub_id}"):
+            context = EvaluationContext(
+                workflow_state=workflow_state,
+                eval_instructions=eval_instructions,
+                criteria=criteria
+            )
+
+            total_max_points = self._calculate_total_points(criteria)
+
+            def agent_instructions(run_context: RunContextWrapper[EvaluationContext], _agent: Agent):
+                ctx = run_context.context
+
+                criteria_text = ""
+                for i, crit in enumerate(ctx.criteria):
+                    criteria_text += f"\n## Criterion {i+1}"
+                    if crit.get('criterion_name'):
+                        criteria_text += f": {crit['criterion_name']}"
+                    criteria_text += f"\nMax Points: {crit.get('max_points', 0)}\n"
+                    if crit.get('summary_instructions'):
+                        criteria_text += f"Summary: {crit['summary_instructions']}\n"
+                    if crit.get('grading_instructions'):
+                        criteria_text += f"Grading: {crit['grading_instructions']}\n"
+                    criteria_text += "\n"
+
+                conversation_text = ""
+                for i, ans in enumerate(ctx.workflow_state.answers):
+                    conversation_text += f"\n{'='*60}\n"
+                    conversation_text += f"Exchange {i+1}:\n"
+                    conversation_text += f"{'='*60}\n\n"
+                    conversation_text += f"**User:** {ans.get('user_message', 'N/A')}\n"
+                    conversation_text += f"**Agent:** {ans.get('agent_response', 'N/A')}\n\n"
+
+                return f"""{ctx.eval_instructions}
+
+# Conversation History
+{conversation_text}
+
+# Evaluation Criteria
+{criteria_text}
+
+# Your Task
+
+Evaluate the conversation based on the criteria provided.
+
+For each criterion:
+1. Review the conversation exchanges
+2. Assess how well the student met the criterion
+3. Assign a grade (0 to max_points for that criterion)
+4. Provide clear reasoning
+
+Format your response as:
+
+# Evaluation Report
+
+## Criterion 1: [Name]
+**Assessment:** [Detailed assessment]
+**Grade:** X/Y points
+**Reasoning:** [Why this grade was assigned]
+
+## Criterion 2: [Name]
+**Assessment:** [Detailed assessment]
+**Grade:** X/Y points
+**Reasoning:** [Explanation]
+
+# Summary
+**Total Score:** X/{total_max_points} points
+**Overall Performance:** [Brief summary]
+**Recommendations:** [Optional suggestions]"""
+
+            agent = Agent[EvaluationContext](
+                name="MemoryAgentEvaluator",
+                instructions=agent_instructions,
+                model=model,
+                model_settings=ModelSettings(temperature=0.3, max_tokens=2048)
+            )
+
+            result = await Runner.run(agent, "", context=context)
+            evaluation_text = result.final_output_as(str)
+
+            if isinstance(evaluation_text, str):
+                evaluation_text = evaluation_text.strip()
+
+            return evaluation_text
