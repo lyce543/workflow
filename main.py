@@ -194,7 +194,11 @@ async def evaluate_chat(ub_id: int):
                 criteria = json.loads(criteria)
             except:
                 criteria = []
-        
+
+        print(f"DEBUG block keys: {list(block.keys())}")
+        print(f"DEBUG eval_crit_json raw: {block.get('eval_crit_json')}")
+        print(f"DEBUG eval criteria for ub_id={ub_id}: {criteria}")
+
         template_id = block["int_template_id"]
         workflow_class = get_workflow_class(template_id)
         
@@ -213,7 +217,8 @@ async def evaluate_chat(ub_id: int):
         
         print(f"Saving evaluation to Xano via update_ub endpoint...")
         
-        update_result = await xano.update_chat_status(ub_id, grade=evaluation_text, status=ChatStatus.FINISHED)
+        current_status = session.get("status", ChatStatus.STARTED)
+        update_result = await xano.update_chat_status(ub_id, grade=evaluation_text, status=current_status)
         
         if update_result:
             print(f"Grade saved successfully: {update_result}")
