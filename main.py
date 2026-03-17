@@ -217,8 +217,7 @@ async def evaluate_chat(ub_id: int):
         
         print(f"Saving evaluation to Xano via update_ub endpoint...")
         
-        current_status = session.get("status", ChatStatus.STARTED)
-        update_result = await xano.update_chat_status(ub_id, grade=evaluation_text, status=current_status)
+        update_result = await xano.update_chat_status(ub_id, grade=evaluation_text)
         
         if update_result:
             print(f"Grade saved successfully: {update_result}")
