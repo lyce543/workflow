@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 from models import StudentMessage, AssistantResponse, ChatStatus
 from xano_client import XanoClient
-from workflows import get_workflow_class, MemoryAgentWorkflow
+from workflows import get_workflow_class, MemoryAgentWorkflow, AgentBuilderWorkflow
 from fastapi import UploadFile, File
 
 import tiktoken
@@ -97,20 +97,18 @@ async def process_student_message(message: StudentMessage):
         workflow_id = block.get("workflow_id")
 
         if workflow_id and workflow_id != 'self-hosted':
-            raise HTTPException(
-                status_code=400,
-                detail="This block uses ChatKit workflow. Use /chatkit/session endpoint instead."
-            )
-        
-        template_id = block["int_template_id"]
-        print(f"Template ID: {template_id}")
-        workflow_class = get_workflow_class(template_id)
-        
-        if not workflow_class:
-            raise HTTPException(status_code=400, detail=f"No workflow found for template {template_id}")
-        
-        print(f"Workflow class: {workflow_class.__name__}")
-        workflow = workflow_class(Config.OPENAI_API_KEY)
+            print(f"OpenAI-hosted workflow: {workflow_id}")
+            workflow = AgentBuilderWorkflow(Config.OPENAI_API_KEY)
+        else:
+            template_id = block["int_template_id"]
+            print(f"Template ID: {template_id}")
+            workflow_class = get_workflow_class(template_id)
+
+            if not workflow_class:
+                raise HTTPException(status_code=400, detail=f"No workflow found for template {template_id}")
+
+            print(f"Workflow class: {workflow_class.__name__}")
+            workflow = workflow_class(Config.OPENAI_API_KEY)
         
         course_id = block.get("_lesson", {}).get("course_id") or block.get("_lesson", {}).get("_course", {}).get("id") or session.get("course_id") or 0
         user_id = session.get("user_id") or 0
@@ -122,7 +120,7 @@ async def process_student_message(message: StudentMessage):
             print(f"Starting stream for ub_id: {message.ub_id}")
             chunk_count = 0
             
-            if isinstance(workflow, MemoryAgentWorkflow) and message.files:
+            if message.files and isinstance(workflow, (MemoryAgentWorkflow, AgentBuilderWorkflow)):
                 stream = workflow.run_workflow_stream(block, template_data, message.content, message.ub_id, xano, user_files=message.files)
             else:
                 stream = workflow.run_workflow_stream(block, template_data, message.content, message.ub_id, xano)
