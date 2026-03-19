@@ -56,13 +56,29 @@ class AgentBuilderWorkflow(BaseWorkflow):
             
             return session_info
     
-    async def _send_message_to_chatkit(self, session_info: dict, user_message: str) -> AsyncGenerator[str, None]:
+    async def _send_message_to_chatkit(self, session_info: dict, user_message: str, user_files: list = []) -> AsyncGenerator[str, None]:
         client_secret = session_info.get("client_secret")
-        
+
         if not client_secret:
             yield "Error: No client secret available."
             return
-        
+
+        content = []
+        if user_message:
+            content.append({"type": "input_text", "text": user_message})
+        for f in user_files:
+            file_data = f.get("file_data", "") or ""
+            mime = f.get("type", "") or ""
+            name = f.get("name", "file")
+            url = f.get("url", "") or ""
+            is_image = mime.startswith("image/") or file_data.startswith("data:image/")
+            if is_image:
+                content.append({"type": "input_image", "image_url": file_data or url})
+            elif file_data:
+                content.append({"type": "input_file", "filename": name, "file_data": file_data})
+        if not content:
+            content.append({"type": "input_text", "text": ""})
+
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
@@ -74,7 +90,7 @@ class AgentBuilderWorkflow(BaseWorkflow):
                     "Accept": "text/event-stream"
                 },
                 json={
-                    "content": [{"type": "input_text", "text": user_message}]
+                    "content": content
                 },
                 timeout=120.0
             ) as response:
@@ -121,7 +137,8 @@ class AgentBuilderWorkflow(BaseWorkflow):
         template: Dict,
         user_message: str,
         ub_id: int,
-        xano
+        xano,
+        user_files: List[Dict] = []
     ) -> AsyncGenerator[str, None]:
         workflow_id = block.get("workflow_id")
         
@@ -152,7 +169,7 @@ class AgentBuilderWorkflow(BaseWorkflow):
             
             full_response = ""
             
-            async for chunk in self._send_message_to_chatkit(session_info, user_message):
+            async for chunk in self._send_message_to_chatkit(session_info, user_message, user_files):
                 full_response += chunk
                 yield chunk
             
