@@ -35,8 +35,7 @@ class AgentBuilderWorkflow(BaseWorkflow):
                 json={
                     "workflow": {"id": workflow_id},
                     "user": user_id,
-                    "expires_after": 1800,
-                    "max_requests_per_session": 500
+                    "expires_after": 600
                 }
             )
             
@@ -49,7 +48,7 @@ class AgentBuilderWorkflow(BaseWorkflow):
                 "session_id": session_data.get("id"),
                 "client_secret": session_data.get("client_secret"),
                 "thread_id": session_data.get("thread_id"),
-                "expires_at": datetime.now().timestamp() + 1800,
+                "expires_at": datetime.now().timestamp() + 600,
                 "workflow_id": workflow_id
             }
             
