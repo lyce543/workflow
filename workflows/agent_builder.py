@@ -36,7 +36,6 @@ class AgentBuilderWorkflow(BaseWorkflow):
                     "workflow": {"id": workflow_id},
                     "user": user_id,
                     "expires_after": 1800,
-                    "max_requests_per_1_minute": 60,
                     "max_requests_per_session": 500
                 }
             )
