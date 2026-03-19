@@ -34,8 +34,7 @@ class AgentBuilderWorkflow(BaseWorkflow):
                 },
                 json={
                     "workflow": {"id": workflow_id},
-                    "user": user_id,
-                    "expires_after": 600
+                    "user": user_id
                 }
             )
             
