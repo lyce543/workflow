@@ -347,23 +347,46 @@ class ChatKitSessionRequest(BaseModel):
 async def create_chatkit_session(request: ChatKitSessionRequest):
     try:
         from openai import OpenAI
-        
+
         client = OpenAI(api_key=Config.OPENAI_API_KEY)
-        
+
         session = client.beta.chatkit.sessions.create(
             user=request.user_id,
             workflow={"id": request.workflow_id}
         )
-        
+
+        thread_id = None
+        try:
+            threads = client.beta.chatkit.threads.list(user=request.user_id, limit=1, order="desc")
+            if threads.data:
+                thread_id = threads.data[0].id
+        except Exception as e:
+            print(f"Could not fetch existing thread: {e}")
+
         return {
             "client_secret": session.client_secret,
             "session_id": session.id,
-            "expires_at": session.expires_at
+            "expires_at": session.expires_at,
+            "thread_id": thread_id
         }
-        
+
     except Exception as e:
         print(f"Error creating ChatKit session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/chatkit/thread/agent/{user_id}")
+async def get_agent_builder_thread(user_id: str):
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=Config.OPENAI_API_KEY)
+        threads = client.beta.chatkit.threads.list(user=user_id, limit=1, order="desc")
+        thread_id = threads.data[0].id if threads.data else None
+        return {"thread_id": thread_id}
+    except Exception as e:
+        print(f"Error fetching agent builder thread: {e}")
+        return {"thread_id": None}
+
 
 @app.post("/chatkit/upload")
 async def chatkit_upload(request: Request, file: UploadFile = File(...)):
