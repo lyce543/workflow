@@ -341,6 +341,7 @@ async def add_files_to_last_answer(ub_id: int, request: AddFilesRequest):
 class ChatKitSessionRequest(BaseModel):
     workflow_id: str
     user_id: str = "anonymous"
+    ub_id: str | None = None
 
 
 @app.post("/chatkit/session")
@@ -350,9 +351,13 @@ async def create_chatkit_session(request: ChatKitSessionRequest):
 
         client = OpenAI(api_key=Config.OPENAI_API_KEY)
 
+        workflow_params = {"id": request.workflow_id}
+        if request.ub_id:
+            workflow_params["state_variables"] = {"ub_id": request.ub_id}
+
         session = client.beta.chatkit.sessions.create(
             user=request.user_id,
-            workflow={"id": request.workflow_id}
+            workflow=workflow_params
         )
 
         thread_id = None
