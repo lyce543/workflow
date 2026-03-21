@@ -357,7 +357,8 @@ async def create_chatkit_session(request: ChatKitSessionRequest):
 
         session = client.beta.chatkit.sessions.create(
             user=request.user_id,
-            workflow=workflow_params
+            workflow=workflow_params,
+            expires_after={"anchor": "created_at", "seconds": 86400}
         )
 
         thread_id = None
