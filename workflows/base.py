@@ -101,6 +101,47 @@ class BaseWorkflow(ABC):
                 criteria = []
         return criteria
     
+    def _convert_air_to_history(self, air_records: List[Dict]) -> List[Dict]:
+        history = []
+        for i, record in enumerate(air_records):
+            user_content = record.get("user_content") or {}
+            if isinstance(user_content, str):
+                try:
+                    user_content = json.loads(user_content)
+                except Exception:
+                    user_content = {}
+
+            ai_content = record.get("ai_content") or []
+            if isinstance(ai_content, str):
+                try:
+                    ai_content = json.loads(ai_content)
+                except Exception:
+                    ai_content = []
+
+            user_files = record.get("user_files") or []
+            if isinstance(user_files, str):
+                try:
+                    user_files = json.loads(user_files)
+                except Exception:
+                    user_files = []
+
+            ai_text = ai_content[0].get("text", "") if ai_content else ""
+            user_text = user_content.get("text", "")
+            history.append({
+                "turn": i + 1,
+                "user_message": user_text,
+                "answer": user_text,
+                "assistant_response": ai_text,
+                "agent_response": ai_text,
+                "interviewer_question": ai_text,
+                "coach_response": ai_text,
+                "tutor_response": ai_text,
+                "user_files": user_files,
+                "timestamp": record.get("created_at", ""),
+                "evaluation": {}
+            })
+        return history
+
     def _calculate_total_points(self, criteria: List[Dict[str, Any]]) -> int:
         total = 0
         for crit in criteria:
