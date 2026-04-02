@@ -53,7 +53,16 @@ class XanoClient:
                 data = response.json()
                 if data and not data.get('error'):
                     data['questions'] = json.loads(data['questions']) if isinstance(data.get('questions'), str) else data.get('questions', [])
-                    data['answers'] = json.loads(data['answers']) if isinstance(data.get('answers'), str) else data.get('answers', [])
+                    raw_ans = data.get('answers')
+                    if isinstance(raw_ans, str):
+                        try:
+                            data['answers'] = json.loads(raw_ans)
+                        except Exception:
+                            data['answers'] = []
+                    elif isinstance(raw_ans, list):
+                        data['answers'] = raw_ans
+                    else:
+                        data['answers'] = []
                     raw_cd = data.get('custom_data')
                     if isinstance(raw_cd, str) and raw_cd.strip():
                         try:
