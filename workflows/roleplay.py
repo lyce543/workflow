@@ -95,9 +95,12 @@ CRITICAL: If you notice you're asking similar questions repeatedly, STOP and mov
             
             if not state.custom_data.get('progress_notes'):
                 state.custom_data['progress_notes'] = []
-            
+
+            air_records = await xano.get_air_history(ub_id)
+            state.answers = self._convert_air_to_history(air_records)
+
             context = WorkflowContext(state=state)
-            
+
             agent = self.create_roleplay_agent(context, specs, template.get("model", "gpt-4o"))
             result = Runner.run_streamed(agent, user_message, context=context)
             
@@ -107,14 +110,6 @@ CRITICAL: If you notice you're asking similar questions repeatedly, STOP and mov
                     chunk = event.data.delta
                     full_response += chunk
                     yield chunk
-            
-            turn_number = len(state.answers) + 1
-            state.answers.append({
-                "user_message": user_message,
-                "agent_response": full_response,
-                "timestamp": datetime.now().isoformat(),
-                "turn": turn_number
-            })
             
             self._update_progress_tracking(state, user_message, full_response)
             

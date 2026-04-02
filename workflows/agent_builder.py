@@ -165,19 +165,11 @@ class AgentBuilderWorkflow(BaseWorkflow):
                 return
             
             full_response = ""
-            
+
             async for chunk in self._send_message_to_chatkit(session_info, user_message, user_files):
                 full_response += chunk
                 yield chunk
-            
-            state.answers.append({
-                "user_message": user_message,
-                "assistant_response": full_response,
-                "timestamp": datetime.now().isoformat(),
-                "workflow_id": workflow_id,
-                "session_id": session_info.get("session_id")
-            })
-            
+
             await xano.save_workflow_state(state)
     
     async def run_evaluation(

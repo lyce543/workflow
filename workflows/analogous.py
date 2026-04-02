@@ -9,56 +9,46 @@ from .base import BaseWorkflow, WorkflowContext, WorkflowState, EvaluationContex
 
 
 class AnalogousWorkflow(BaseWorkflow):
-    
-    def create_tutor_agent(self, context: WorkflowContext, specs: Dict, model: str, last_evaluation: Dict = None) -> Agent[WorkflowContext]:
+
+    def create_tutor_agent(self, context: WorkflowContext, specs: Dict, model: str) -> Agent[WorkflowContext]:
         def agent_instructions(run_context: RunContextWrapper[WorkflowContext], _agent: Agent):
             ctx = run_context.context
-            
+
             learning_goal = specs.get('learning_goal', '')
             flexible_part = specs.get('flexible part', '')
             examples = specs.get('examples', '')
-            
+
             current_assignment_index = ctx.state.current_question_index
-            
-            topic = ""
-            if ctx.state.answers:
-                for ans in ctx.state.answers:
-                    if ans.get('topic'):
-                        topic = ans.get('topic')
-                        break
-            
+            topic = ctx.state.custom_data.get('topic', '')
+            pending = ctx.state.custom_data.get('pending') or {}
+            evaluations = ctx.state.custom_data.get('evaluations', [])
+
             conversation_history = ""
-            if len(ctx.state.answers) > 0:
+            if ctx.state.answers:
                 conversation_history = "\n# Recent conversation:\n"
                 for ans in ctx.state.answers[-5:]:
                     if ans.get('user_message'):
                         conversation_history += f"Student: {ans['user_message']}\n"
-                    if ans.get('tutor_response'):
-                        conversation_history += f"You: {ans['tutor_response']}\n"
-                    if ans.get('assignment'):
-                        conversation_history += f"You: {ans['assignment']}\n"
-                    if ans.get('answer'):
-                        conversation_history += f"Student answer: {ans['answer']}\n"
-            
-            last_answer = ctx.state.answers[-1] if ctx.state.answers else {}
-            
-            if last_answer.get('waiting_for_answer'):
-                student_message = last_answer.get('user_message', '')
-                
+                    if ans.get('tutor_response') or ans.get('assistant_response'):
+                        conversation_history += f"You: {ans.get('tutor_response') or ans.get('assistant_response', '')}\n"
+
+            if pending.get('waiting_for_answer'):
+                assignment_text = pending.get('assignment', '')
+                last_user_msg = ctx.state.custom_data.get('last_user_message', '')
+
                 question_indicators = [
-                    '?', 'what', 'how', 'why', 'could you', 'can you', 'explain', 'help', 
-                    'don\'t understand', 'unclear', 'confused', 'mean', 'clarify',
+                    '?', 'what', 'how', 'why', 'could you', 'can you', 'explain', 'help',
+                    "don't understand", 'unclear', 'confused', 'mean', 'clarify',
                     'не розумію', 'поясни', 'що', 'як', 'чому', 'допоможи', 'розкажи',
                     'не зрозумів', 'не зрозуміла', 'шо', 'допоможіть', 'підкажи'
                 ]
-                is_question = any(indicator in student_message.lower() for indicator in question_indicators)
-                
-                assignment_length = len(last_answer.get('assignment', '').split())
-                answer_length = len(student_message.split())
+                is_question = any(indicator in last_user_msg.lower() for indicator in question_indicators)
+
+                assignment_length = len(assignment_text.split())
+                answer_length = len(last_user_msg.split())
                 seems_incomplete = answer_length < assignment_length * 0.3
-                
+
                 if is_question or seems_incomplete:
-                    assignment_text = last_answer.get('assignment', '')
                     return f"""You are a warm, helpful English tutor. The student needs help with the assignment.
 
 {conversation_history}
@@ -69,7 +59,7 @@ class AnalogousWorkflow(BaseWorkflow):
 # Topic: {topic}
 
 # Student's message:
-{student_message}
+{last_user_msg}
 
 # Your task:
 The student is asking for help or clarification. Be supportive and conversational!
@@ -87,11 +77,11 @@ IMPORTANT: Be natural and conversational, not robotic. Show empathy and make lea
 Keep your response helpful and friendly (max 250 words).
 
 Remind them gently that they can try when they feel ready."""
-                
-                else:
-                    return f"""The student sent: "{student_message}"
 
-This doesn't look like a complete answer to the assignment. 
+                else:
+                    return f"""The student sent: "{last_user_msg}"
+
+This doesn't look like a complete answer to the assignment.
 
 Respond warmly and naturally:
 - Acknowledge what they sent
@@ -100,13 +90,14 @@ Respond warmly and naturally:
 - Keep it conversational and friendly
 
 Max 120 words."""
-            
-            if last_answer and last_answer.get('graded'):
-                evaluation = last_answer.get('evaluation', {})
-                student_answer = last_answer.get('answer', '')
-                
+
+            if evaluations:
+                last_eval = evaluations[-1]
+                evaluation = last_eval.get('evaluation', {})
+                student_answer = last_eval.get('answer', '')
+
                 feedback_parts = []
-                
+
                 if evaluation.get('correct'):
                     positive_responses = [
                         "✅ Excellent work! That's exactly right.",
@@ -122,9 +113,9 @@ Max 120 words."""
                         feedback_parts.append(f"❌ {error}")
                     feedback_parts.append(f"\n{evaluation.get('feedback', '')}")
                     feedback_parts.append("\nNo worries though – let's keep practicing! 💪")
-                
+
                 feedback_parts.append(f"\n\n**Ready for the next challenge? Assignment #{current_assignment_index + 1}**\n")
-                
+
                 return f"""You are a friendly, encouraging English tutor. Give feedback naturally and present the next assignment.
 
 {conversation_history}
@@ -149,10 +140,7 @@ CRITICAL RULES:
 6. Be conversational, not formal
 
 Generate assignment #{current_assignment_index + 1} now."""
-            
-            elif last_answer and not last_answer.get('graded'):
-                return "Wait for the student to provide their full answer before proceeding."
-            
+
             else:
                 if not topic:
                     return f"""You are a friendly English tutor starting a conversation.
@@ -168,7 +156,7 @@ Ask the student what topic they'd like to practice with today.
 Be warm and conversational. Give 2-3 interesting example topics.
 
 Keep it natural and inviting (max 100 words)."""
-                
+
                 else:
                     return f"""You are a friendly English tutor presenting the first assignment.
 
@@ -189,29 +177,27 @@ CRITICAL RULES:
 6. Be conversational and encouraging
 
 Generate assignment #1 now."""
-        
+
         return Agent[WorkflowContext](
             name="AnalogousTutor",
             instructions=agent_instructions,
             model=model,
             model_settings=ModelSettings(temperature=0.7, max_tokens=1024)
         )
-    
-    def create_evaluator_agent(self, context: WorkflowContext, model: str) -> Agent[WorkflowContext]:
+
+    def create_evaluator_agent(self, context: WorkflowContext, user_answer: str, model: str) -> Agent[WorkflowContext]:
         def agent_instructions(run_context: RunContextWrapper[WorkflowContext], _agent: Agent):
             ctx = run_context.context
-            
-            last_answer = ctx.state.answers[-1] if ctx.state.answers else {}
-            student_answer = last_answer.get('answer', '')
-            assignment_text = last_answer.get('assignment', '')
-            
+            pending = ctx.state.custom_data.get('pending') or {}
+            assignment_text = pending.get('assignment', '')
+
             return f"""Evaluate the English assignment answer.
 
 # Assignment
 {assignment_text}
 
 # Student Answer
-{student_answer}
+{user_answer}
 
 Check:
 - Is the answer complete?
@@ -225,12 +211,12 @@ Return JSON:
   "errors": ["error explanation", ...],
   "feedback": "encouraging overall feedback"
 }}"""
-        
+
         class EvalOutput(BaseModel):
             correct: bool
             errors: List[str]
             feedback: str
-        
+
         return Agent[WorkflowContext](
             name="AnalogousEvaluator",
             instructions=agent_instructions,
@@ -238,7 +224,45 @@ Return JSON:
             output_type=EvalOutput,
             model_settings=ModelSettings(temperature=0.2, max_tokens=512)
         )
-    
+
+    def _migrate_old_answers(self, state: WorkflowState):
+        """Migrate old state.answers format to custom_data['topic'] + custom_data['pending'] + custom_data['evaluations']."""
+        old_answers = state.answers
+        if not old_answers:
+            return
+
+        evaluations = []
+        pending = None
+        topic = ''
+
+        for ans in old_answers:
+            # Extract topic from any answer that has it
+            if ans.get('topic') and not topic:
+                topic = ans['topic']
+
+            answer_text = ans.get('answer', '')
+            assignment_text = ans.get('assignment', '')
+
+            if ans.get('graded') and answer_text:
+                evaluations.append({
+                    "assignment_index": ans.get('assignment_index', len(evaluations)),
+                    "assignment": assignment_text,
+                    "answer": answer_text,
+                    "evaluation": ans.get('evaluation', {})
+                })
+            elif ans.get('waiting_for_answer') and assignment_text:
+                pending = {
+                    "assignment_index": ans.get('assignment_index', len(evaluations)),
+                    "assignment": assignment_text,
+                    "waiting_for_answer": True
+                }
+            elif ans.get('waiting_for_topic'):
+                pending = {'waiting_for_topic': True}
+
+        state.custom_data['topic'] = topic
+        state.custom_data['evaluations'] = evaluations
+        state.custom_data['pending'] = pending
+
     async def run_workflow_stream(self, block: Dict, template: Dict, user_message: str, ub_id: int, xano) -> AsyncGenerator[str, None]:
         with trace(f"Analogous-{ub_id}"):
             specifications = self.parse_specifications(block)
@@ -251,225 +275,211 @@ Return JSON:
             specs = specifications[0] if specifications else {}
 
             state = await self.load_or_create_state(ub_id, block["id"], specifications, xano)
-            
+
             if state.status == "finished":
                 yield "Assignments завершено. Дякую за роботу!"
                 return
-            
+
+            # Migrate old format before overwriting state.answers with air history
+            if 'pending' not in state.custom_data and 'evaluations' not in state.custom_data:
+                self._migrate_old_answers(state)
+
+            air_records = await xano.get_air_history(ub_id)
+            state.answers = self._convert_air_to_history(air_records)
+
+            if 'evaluations' not in state.custom_data:
+                state.custom_data['evaluations'] = []
+
             context = WorkflowContext(state=state)
-            
-            if len(state.answers) == 0:
-                tutor = self.create_tutor_agent(context, specs, template.get("model", "gpt-4o"))
-                result = Runner.run_streamed(tutor, "", context=context)
-                
-                full_response = ""
-                async for event in result.stream_events():
-                    if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
-                        chunk = event.data.delta
-                        full_response += chunk
-                        yield chunk
-                
-                state.answers.append({
-                    "assignment_index": 0,
-                    "topic": "",
-                    "assignment": full_response,
-                    "answer": "",
-                    "timestamp": datetime.now().isoformat(),
-                    "graded": False,
-                    "waiting_for_topic": True,
-                    "user_message": user_message if user_message else "",
-                    "tutor_response": ""
-                })
-                await xano.save_workflow_state(state)
-                return
-            
-            last_answer = state.answers[-1] if state.answers else {}
-            
-            if last_answer.get('waiting_for_topic'):
-                topic = user_message.strip()
-                
-                if len(topic.split()) <= 2 or '?' in topic:
-                    state.answers.append({
-                        "assignment_index": 0,
-                        "topic": "",
-                        "assignment": "",
-                        "answer": "",
-                        "timestamp": datetime.now().isoformat(),
-                        "graded": False,
-                        "waiting_for_topic": True,
-                        "user_message": user_message,
-                        "tutor_response": ""
-                    })
-                    
-                    tutor = self.create_tutor_agent(context, specs, template.get("model", "gpt-4o"))
-                    result = Runner.run_streamed(tutor, user_message, context=context)
-                    
+            model = template.get("model", "gpt-4o")
+
+            topic = state.custom_data.get('topic', '')
+            pending = state.custom_data.get('pending')
+
+            # Phase 1: No topic yet — ask for topic or process topic response
+            if not topic and not pending:
+                # No topic and no pending assignment — ask for topic
+                if not user_message or not state.answers:
+                    tutor = self.create_tutor_agent(context, specs, model)
+                    result = Runner.run_streamed(tutor, "", context=context)
+
                     full_response = ""
                     async for event in result.stream_events():
                         if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
                             chunk = event.data.delta
                             full_response += chunk
                             yield chunk
-                    
-                    state.answers[-1]['tutor_response'] = full_response
+
+                    state.custom_data['pending'] = {'waiting_for_topic': True}
                     await xano.save_workflow_state(state)
                     return
-                
-                state.answers.append({
-                    "assignment_index": 0,
-                    "topic": topic,
-                    "assignment": "",
-                    "answer": "",
-                    "timestamp": datetime.now().isoformat(),
-                    "graded": False,
-                    "waiting_for_topic": False,
-                    "waiting_for_answer": True,
-                    "user_message": user_message,
-                    "tutor_response": ""
-                })
-                
-                tutor = self.create_tutor_agent(context, specs, template.get("model", "gpt-4o"))
-                result = Runner.run_streamed(tutor, "", context=context)
-                
-                full_response = ""
-                async for event in result.stream_events():
-                    if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
-                        chunk = event.data.delta
-                        full_response += chunk
-                        yield chunk
-                
-                state.answers[-1]['assignment'] = full_response
-                await xano.save_workflow_state(state)
-                return
-            
-            if last_answer and last_answer.get('waiting_for_answer'):
-                student_message = user_message.strip()
-                
-                question_indicators = [
-                    '?', 'what', 'how', 'why', 'could you', 'can you', 'explain', 'help', 
-                    'don\'t understand', 'unclear', 'confused', 'mean', 'clarify',
-                    'не розумію', 'поясни', 'що', 'як', 'чому', 'допоможи', 'розкажи',
-                    'не зрозумів', 'не зрозуміла', 'шо', 'допоможіть', 'підкажи'
-                ]
-                is_question = any(indicator in student_message.lower() for indicator in question_indicators)
-                
-                short_response_indicators = ['ok', 'okay', 'thanks', 'got it', 'understand', 'yes', 'no', 'wait']
-                is_short_response = len(student_message.split()) <= 3 and any(indicator in student_message.lower() for indicator in short_response_indicators)
-                
-                assignment_length = len(last_answer.get('assignment', '').split())
-                answer_length = len(student_message.split())
-                seems_incomplete = answer_length < assignment_length * 0.3
-                
-                if is_question or is_short_response or seems_incomplete:
-                    topic = ""
-                    for ans in state.answers:
-                        if ans.get('topic'):
-                            topic = ans.get('topic')
-                            break
-                    
-                    state.answers.append({
-                        "assignment_index": state.current_question_index,
-                        "topic": topic,
-                        "assignment": last_answer.get('assignment', ''),
-                        "answer": "",
-                        "timestamp": datetime.now().isoformat(),
-                        "graded": False,
-                        "waiting_for_answer": True,
-                        "user_message": user_message,
-                        "tutor_response": ""
-                    })
-                    
-                    tutor = self.create_tutor_agent(context, specs, template.get("model", "gpt-4o"))
-                    result = Runner.run_streamed(tutor, user_message, context=context)
-                    
-                    full_response = ""
+
+                # User provided a topic response
+                topic_input = user_message.strip()
+                if len(topic_input.split()) <= 2 or '?' in topic_input:
+                    # Unclear topic — ask again
+                    state.custom_data['last_user_message'] = topic_input
+                    state.custom_data['pending'] = {'waiting_for_topic': True}
+
+                    tutor = self.create_tutor_agent(context, specs, model)
+                    result = Runner.run_streamed(tutor, topic_input, context=context)
+
                     async for event in result.stream_events():
                         if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
-                            chunk = event.data.delta
-                            full_response += chunk
-                            yield chunk
-                    
-                    state.answers[-1]['tutor_response'] = full_response
+                            yield event.data.delta
+
                     await xano.save_workflow_state(state)
                     return
-                
-                last_answer['answer'] = user_message
-                last_answer['timestamp'] = datetime.now().isoformat()
-                last_answer['waiting_for_answer'] = False
-                
-                evaluator = self.create_evaluator_agent(context, template.get("model", "gpt-4o"))
-                eval_result = await Runner.run(evaluator, "", context=context)
-                evaluation = eval_result.final_output.model_dump()
-                
-                last_answer['evaluation'] = evaluation
-                last_answer['graded'] = True
-                
-                state.current_question_index += 1
-                
-                await xano.save_workflow_state(state)
-                
-                tutor = self.create_tutor_agent(context, specs, template.get("model", "gpt-4o"), evaluation)
+
+                # Valid topic — save it and generate first assignment
+                state.custom_data['topic'] = topic_input
+                state.custom_data['pending'] = None
+                topic = topic_input
+
+                tutor = self.create_tutor_agent(context, specs, model)
                 result = Runner.run_streamed(tutor, "", context=context)
-                
+
                 full_response = ""
                 async for event in result.stream_events():
                     if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
                         chunk = event.data.delta
                         full_response += chunk
                         yield chunk
-                
-                topic = ""
-                for ans in state.answers:
-                    if ans.get('topic'):
-                        topic = ans.get('topic')
-                        break
-                
-                state.answers.append({
-                    "assignment_index": state.current_question_index,
-                    "topic": topic,
+
+                state.custom_data['pending'] = {
+                    "assignment_index": 0,
                     "assignment": full_response,
-                    "answer": "",
-                    "timestamp": datetime.now().isoformat(),
-                    "graded": False,
-                    "waiting_for_answer": True,
-                    "user_message": "",
-                    "tutor_response": ""
-                })
+                    "waiting_for_answer": True
+                }
                 await xano.save_workflow_state(state)
-            
-            else:
-                tutor = self.create_tutor_agent(context, specs, template.get("model", "gpt-4o"))
+                return
+
+            # Phase 1b: Waiting for topic
+            if pending and pending.get('waiting_for_topic'):
+                topic_input = user_message.strip()
+                if len(topic_input.split()) <= 2 or '?' in topic_input:
+                    state.custom_data['last_user_message'] = topic_input
+
+                    tutor = self.create_tutor_agent(context, specs, model)
+                    result = Runner.run_streamed(tutor, topic_input, context=context)
+
+                    async for event in result.stream_events():
+                        if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
+                            yield event.data.delta
+
+                    await xano.save_workflow_state(state)
+                    return
+
+                state.custom_data['topic'] = topic_input
+                state.custom_data['pending'] = None
+                topic = topic_input
+
+                tutor = self.create_tutor_agent(context, specs, model)
                 result = Runner.run_streamed(tutor, "", context=context)
-                
+
                 full_response = ""
                 async for event in result.stream_events():
                     if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
                         chunk = event.data.delta
                         full_response += chunk
                         yield chunk
-                
-                topic = ""
-                for ans in state.answers:
-                    if ans.get('topic'):
-                        topic = ans.get('topic')
-                        break
-                
-                state.answers.append({
-                    "assignment_index": state.current_question_index,
-                    "topic": topic,
+
+                state.custom_data['pending'] = {
+                    "assignment_index": 0,
                     "assignment": full_response,
-                    "answer": "",
-                    "timestamp": datetime.now().isoformat(),
-                    "graded": False,
-                    "waiting_for_answer": True,
-                    "user_message": "",
-                    "tutor_response": ""
-                })
+                    "waiting_for_answer": True
+                }
                 await xano.save_workflow_state(state)
-    
+                return
+
+            # Phase 2: No pending assignment (between assignments) — generate next
+            if not pending or not pending.get('waiting_for_answer'):
+                tutor = self.create_tutor_agent(context, specs, model)
+                result = Runner.run_streamed(tutor, "", context=context)
+
+                full_response = ""
+                async for event in result.stream_events():
+                    if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
+                        chunk = event.data.delta
+                        full_response += chunk
+                        yield chunk
+
+                state.custom_data['pending'] = {
+                    "assignment_index": state.current_question_index,
+                    "assignment": full_response,
+                    "waiting_for_answer": True
+                }
+                await xano.save_workflow_state(state)
+                return
+
+            # Phase 3: Pending assignment, user is answering
+            student_message = user_message.strip()
+            state.custom_data['last_user_message'] = student_message
+
+            question_indicators = [
+                '?', 'what', 'how', 'why', 'could you', 'can you', 'explain', 'help',
+                "don't understand", 'unclear', 'confused', 'mean', 'clarify',
+                'не розумію', 'поясни', 'що', 'як', 'чому', 'допоможи', 'розкажи',
+                'не зрозумів', 'не зрозуміла', 'шо', 'допоможіть', 'підкажи'
+            ]
+            is_question = any(indicator in student_message.lower() for indicator in question_indicators)
+
+            short_response_indicators = ['ok', 'okay', 'thanks', 'got it', 'understand', 'yes', 'no', 'wait']
+            is_short_response = (len(student_message.split()) <= 3 and
+                                 any(indicator in student_message.lower() for indicator in short_response_indicators))
+
+            assignment_length = len(pending.get('assignment', '').split())
+            answer_length = len(student_message.split())
+            seems_incomplete = answer_length < assignment_length * 0.3
+
+            if is_question or is_short_response or seems_incomplete:
+                tutor = self.create_tutor_agent(context, specs, model)
+                result = Runner.run_streamed(tutor, student_message, context=context)
+
+                async for event in result.stream_events():
+                    if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
+                        yield event.data.delta
+
+                await xano.save_workflow_state(state)
+                return
+
+            # Real answer — evaluate
+            evaluator = self.create_evaluator_agent(context, student_message, model)
+            eval_result = await Runner.run(evaluator, "", context=context)
+            evaluation = eval_result.final_output.model_dump()
+
+            state.custom_data['evaluations'].append({
+                "assignment_index": pending.get('assignment_index', state.current_question_index),
+                "assignment": pending.get('assignment', ''),
+                "answer": student_message,
+                "evaluation": evaluation
+            })
+            state.custom_data['pending'] = None
+            state.current_question_index += 1
+
+            await xano.save_workflow_state(state)
+
+            # Generate next assignment
+            tutor = self.create_tutor_agent(context, specs, model)
+            result = Runner.run_streamed(tutor, "", context=context)
+
+            full_response = ""
+            async for event in result.stream_events():
+                if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
+                    chunk = event.data.delta
+                    full_response += chunk
+                    yield chunk
+
+            state.custom_data['pending'] = {
+                "assignment_index": state.current_question_index,
+                "assignment": full_response,
+                "waiting_for_answer": True
+            }
+            await xano.save_workflow_state(state)
+
     def _format_feedback(self, evaluation: Dict, student_answer: str) -> str:
         feedback_parts = []
-        
+
         if evaluation.get('correct', False):
             feedback_parts.append("✅ Excellent! All answers are correct.")
         else:
@@ -477,9 +487,9 @@ Return JSON:
             for error in evaluation.get('errors', []):
                 feedback_parts.append(f"❌ {error}")
             feedback_parts.append(f"\n{evaluation.get('feedback', '')}")
-        
+
         return "\n".join(feedback_parts)
-    
+
     async def run_evaluation(
         self,
         ub_id: int,
@@ -489,24 +499,43 @@ Return JSON:
         model: str
     ) -> str:
         with trace(f"AnalogousEval-{ub_id}"):
+            # Build answers list from evaluations stored in custom_data
+            stored_evaluations = workflow_state.custom_data.get('evaluations', [])
+            if stored_evaluations:
+                workflow_state.answers = stored_evaluations
+            elif workflow_state.answers:
+                # Fallback for old migrated chats: remap air-based records to evaluation format
+                workflow_state.answers = [
+                    {
+                        "assignment_index": i,
+                        "assignment": ans.get('agent_response', ans.get('interviewer_question', '')),
+                        "answer": ans.get('user_message', ans.get('answer', '')),
+                        "evaluation": {}
+                    }
+                    for i, ans in enumerate(workflow_state.answers)
+                    if ans.get('user_message') or ans.get('answer')
+                ]
+            else:
+                workflow_state.answers = []
+
             context = EvaluationContext(
                 workflow_state=workflow_state,
                 eval_instructions=eval_instructions,
                 criteria=criteria
             )
-            
+
             total_max_points = self._calculate_total_points(criteria)
-            
+
             def agent_instructions(run_context: RunContextWrapper[EvaluationContext], _agent: Agent):
                 ctx = run_context.context
-            
+
                 assignments_text = ""
                 completed_count = 0
                 correct_count = 0
-                
+
                 for i, ans in enumerate(ctx.workflow_state.answers):
                     answer_text = ans.get('answer', '')
-                    
+
                     if answer_text:
                         completed_count += 1
                         assignments_text += f"\n{'='*60}\n"
@@ -514,7 +543,7 @@ Return JSON:
                         assignments_text += f"{'='*60}\n\n"
                         assignments_text += f"**Task:** {ans.get('assignment', 'N/A')}\n\n"
                         assignments_text += f"**Student Answer:** {answer_text}\n\n"
-                        
+
                         evaluation = ans.get('evaluation', {})
                         if evaluation:
                             correct = evaluation.get('correct', False)
@@ -531,9 +560,9 @@ Return JSON:
                                 assignments_text += f"**Feedback:** {evaluation.get('feedback')}\n"
                         else:
                             assignments_text += f"**Result:** ⚠️ Not yet evaluated\n"
-                        
+
                         assignments_text += "\n"
-                
+
                 if completed_count == 0:
                     return f"""You are an evaluator for an English learning assignment.
 
@@ -559,7 +588,7 @@ Format as a brief evaluation report with a score of 0/{total_max_points} points.
                         criteria_text += f"**Summary Instructions:** {crit['summary_instructions']}\n"
                     if crit.get('grading_instructions'):
                         criteria_text += f"**Grading Instructions:** {crit['grading_instructions']}\n"
-                
+
                 return f"""{ctx.eval_instructions}
 
 # Summary Statistics
@@ -606,18 +635,18 @@ Format your response as:
 **Total Score:** X/{total_max_points} points
 **Overall Performance:** [Brief summary]
 **Recommendations:** [Optional suggestions]"""
-            
+
             agent = Agent[EvaluationContext](
                 name="AnalogousFullEvaluator",
                 instructions=agent_instructions,
                 model=model,
                 model_settings=ModelSettings(temperature=0.3, max_tokens=2048)
             )
-            
+
             result = await Runner.run(agent, "Please evaluate the student's performance based on the assignments and criteria provided in the instructions.", context=context)
             evaluation_text = result.final_output_as(str)
-            
+
             if isinstance(evaluation_text, str):
                 evaluation_text = evaluation_text.strip()
-            
+
             return evaluation_text
