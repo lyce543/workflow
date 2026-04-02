@@ -119,7 +119,21 @@ async def process_student_message(message: StudentMessage):
             full_response = ""
             print(f"Starting stream for ub_id: {message.ub_id}")
             chunk_count = 0
-            
+
+            # Зберігаємо повідомлення студента в air
+            user_files_for_air = [
+                {"url": f.get("url", ""), "type": f.get("type", ""), "name": f.get("name", "")}
+                for f in (message.files or [])
+            ]
+            air_record = await xano.add_air_message(
+                ub_id=message.ub_id,
+                user_id=user_id,
+                block_id=block_id,
+                text=message.content,
+                user_files=user_files_for_air
+            )
+            air_id = air_record.get("id")
+
             if message.files and isinstance(workflow, (MemoryAgentWorkflow, AgentBuilderWorkflow)):
                 stream = workflow.run_workflow_stream(block, template_data, message.content, message.ub_id, xano, user_files=message.files)
             else:
@@ -129,13 +143,21 @@ async def process_student_message(message: StudentMessage):
                 print(f"Chunk {chunk_count}: {chunk[:50]}..." if len(chunk) > 50 else f"Chunk {chunk_count}: {chunk}")
                 full_response += chunk
                 yield chunk
-            
+
             print(f"Stream complete. Total chunks: {chunk_count}")
             print(f"Full response length: {len(full_response)} characters")
-            
+
+            # Оновлюємо запис в air з відповіддю AI
+            if air_id:
+                await xano.update_air_message(
+                    air_id=air_id,
+                    ai_content=[{"text": full_response}],
+                    status="completed"
+                )
+
             input_tokens = estimate_tokens(message.content, model)
             output_tokens = estimate_tokens(full_response, model)
-            
+
             await xano.save_token_usage(
                 ub_id=message.ub_id,
                 block_id=block_id,
@@ -146,7 +168,7 @@ async def process_student_message(message: StudentMessage):
                 model=model,
                 operation_type="chat"
             )
-            
+
             print(f"Token usage saved: input={input_tokens}, output={output_tokens}")
             print(f"=== END: Message processing for ub_id: {message.ub_id} ===\n")
         
@@ -166,9 +188,9 @@ async def evaluate_chat(ub_id: int):
     try:
         session = await xano.get_chat_session(ub_id)
         
-        if session.get('grade'):
+        if session.get('work_summary'):
             return {
-                "evaluation": session['grade'],
+                "evaluation": session['work_summary'],
                 "timestamp": datetime.now().isoformat(),
                 "conversation_length": 0,
                 "criteria_count": 0,
@@ -184,7 +206,41 @@ async def evaluate_chat(ub_id: int):
         workflow_state = await xano.get_workflow_state(ub_id)
         if not workflow_state:
             raise HTTPException(status_code=404, detail="No workflow state found")
-        
+
+        # Підставляємо історію з air для евалуейшну
+        air_records = await xano.get_air_history(ub_id)
+        if air_records:
+            import json as _json
+
+            def _parse_field(value, fallback):
+                if isinstance(value, str):
+                    try:
+                        return _json.loads(value)
+                    except Exception:
+                        pass
+                return value if value else fallback
+
+            def _user_text(r):
+                uc = _parse_field(r.get("user_content"), {})
+                return uc.get("text", "") if isinstance(uc, dict) else ""
+
+            def _ai_text(r):
+                ac = _parse_field(r.get("ai_content"), [])
+                if isinstance(ac, list) and ac:
+                    return ac[0].get("text", "") if isinstance(ac[0], dict) else ""
+                return ""
+
+            workflow_state.answers = [
+                {
+                    "user_message": _user_text(r),
+                    "agent_response": _ai_text(r),
+                    "interviewer_question": _ai_text(r),
+                    "answer": _user_text(r),
+                    "evaluation": {}
+                }
+                for r in air_records
+            ]
+
         import json
         criteria = block.get("eval_crit_json", [])
         if isinstance(criteria, str):
@@ -215,12 +271,7 @@ async def evaluate_chat(ub_id: int):
         
         print(f"Saving evaluation to Xano via update_ub endpoint...")
         
-        current_status_str = session.get("status", "started")
-        try:
-            current_status = ChatStatus(current_status_str)
-        except ValueError:
-            current_status = ChatStatus.STARTED
-        update_result = await xano.update_chat_status(ub_id, grade=evaluation_text, status=current_status)
+        update_result = await xano.update_chat_status(ub_id, grade=evaluation_text)
         
         if update_result:
             print(f"Grade saved successfully: {update_result}")
@@ -279,23 +330,52 @@ async def evaluate_lesson_tests(lesson_id: int):
 @app.get("/chat/{ub_id}/state")
 async def get_chat_state(ub_id: int):
     try:
+        import json as _json
+
         workflow_state = await xano.get_workflow_state(ub_id)
-        
+
         if not workflow_state:
             raise HTTPException(status_code=404, detail="No workflow state found")
-        
+
+        air_records = await xano.get_air_history(ub_id)
+
+        if air_records:
+            def _parse(value, fallback):
+                if isinstance(value, str):
+                    try:
+                        return _json.loads(value)
+                    except Exception:
+                        pass
+                return value if value is not None else fallback
+
+            answers = []
+            for r in air_records:
+                uc = _parse(r.get("user_content"), {})
+                ac = _parse(r.get("ai_content"), [])
+                uf = _parse(r.get("user_files"), [])
+                user_text = uc.get("text", "") if isinstance(uc, dict) else ""
+                ai_text = ac[0].get("text", "") if isinstance(ac, list) and ac else ""
+                answers.append({
+                    "user_message": user_text,
+                    "agent_response": ai_text,
+                    "user_files": uf if isinstance(uf, list) else [],
+                    "timestamp": r.get("created_at", "")
+                })
+        else:
+            answers = workflow_state.answers
+
         return {
             "ub_id": workflow_state.ub_id,
             "block_id": workflow_state.block_id,
             "current_question_index": workflow_state.current_question_index,
             "questions": workflow_state.questions,
-            "answers": workflow_state.answers,
+            "answers": answers,
             "follow_up_count": workflow_state.follow_up_count,
             "max_follow_ups": workflow_state.max_follow_ups,
             "status": workflow_state.status,
             "custom_data": workflow_state.custom_data
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -323,19 +403,9 @@ class AddFilesRequest(BaseModel):
 
 @app.post("/chat/{ub_id}/add_files")
 async def add_files_to_last_answer(ub_id: int, request: AddFilesRequest):
-    try:
-        workflow_state = await xano.get_workflow_state(ub_id)
-        if not workflow_state:
-            raise HTTPException(status_code=404, detail="No workflow state found")
-        if not workflow_state.answers:
-            raise HTTPException(status_code=404, detail="No answers found")
-        workflow_state.answers[-1]["user_files"] = request.files
-        await xano.save_workflow_state(workflow_state)
-        return {"success": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    # Files are now stored directly in the air table record via add_air_message.
+    # This endpoint is kept for backwards compatibility but is a no-op.
+    return {"success": True}
 
 
 class ChatKitSessionRequest(BaseModel):
@@ -477,6 +547,150 @@ async def chatkit_endpoint(request: Request):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _extract_turn(ans: dict):
+    """Extract (user_text, ai_text, created_at_ms) from any old answer format."""
+    user_text = (
+        ans.get('user_message') or
+        ans.get('answer') or
+        ''
+    ).strip()
+    ai_text = (
+        ans.get('agent_response') or
+        ans.get('coach_response') or
+        ans.get('assistant_response') or
+        ans.get('tutor_response') or
+        ans.get('interviewer_question') or
+        ''
+    ).strip()
+
+    # Convert original ISO timestamp to milliseconds
+    created_at_ms = None
+    ts = ans.get('timestamp')
+    if ts:
+        try:
+            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            created_at_ms = int(dt.timestamp() * 1000)
+        except Exception:
+            pass
+
+    return user_text, ai_text, created_at_ms
+
+
+@app.get("/admin/migrate-to-air/preview")
+async def preview_migration():
+    """Dry-run: shows what would be migrated without making any changes."""
+    states = await xano.get_all_workflow_states_with_answers()
+    preview = []
+
+    for state in states:
+        ub_id = state.get("ub_id")
+        if not ub_id:
+            continue
+        existing = await xano.get_air_history(ub_id)
+        answers = state.get("_parsed_answers", [])
+        turns = []
+        for ans in answers:
+            user_text, ai_text, created_at_ms = _extract_turn(ans)
+            if user_text or ai_text:
+                turns.append({
+                    "user": user_text[:80] + "..." if len(user_text) > 80 else user_text,
+                    "ai": ai_text[:80] + "..." if len(ai_text) > 80 else ai_text,
+                    "has_files": bool(ans.get('user_files')),
+                    "timestamp": ans.get('timestamp', '')
+                })
+        preview.append({
+            "ub_id": ub_id,
+            "block_id": state.get("block_id"),
+            "turns_count": len(turns),
+            "already_in_air": len(existing),
+            "will_migrate": len(existing) == 0,
+            "turns_preview": turns[:3]
+        })
+
+    total_to_migrate = sum(1 for p in preview if p["will_migrate"])
+    total_skip = sum(1 for p in preview if not p["will_migrate"])
+    return {
+        "total_chats": len(preview),
+        "will_migrate": total_to_migrate,
+        "will_skip": total_skip,
+        "chats": preview
+    }
+
+
+@app.post("/admin/migrate-to-air")
+async def migrate_workflow_answers_to_air():
+    """
+    One-time migration: copies all workflow_state.answers to the air table.
+    Safe to run multiple times — skips ub_ids that already have air records.
+    Preserves original message timestamps.
+    """
+    states = await xano.get_all_workflow_states_with_answers()
+
+    if not states:
+        return {"migrated": 0, "skipped": 0, "message": "No workflow states with answers found"}
+
+    migrated = 0
+    skipped = 0
+    errors = []
+
+    for state in states:
+        ub_id = state.get("ub_id")
+        if not ub_id:
+            continue
+
+        try:
+            existing = await xano.get_air_history(ub_id)
+            if existing:
+                skipped += 1
+                continue
+
+            answers = state.get("_parsed_answers", [])
+            block_id = state.get("block_id") or 0
+
+            for ans in answers:
+                user_text, ai_text, created_at_ms = _extract_turn(ans)
+
+                if not user_text and not ai_text:
+                    continue
+
+                user_files = ans.get('user_files') or []
+                # Normalize file format
+                if user_files and isinstance(user_files[0], dict):
+                    user_files = [
+                        {"url": f.get("url", ""), "type": f.get("type", ""), "name": f.get("name", "")}
+                        for f in user_files
+                    ]
+
+                air_record = await xano.add_air_message(
+                    ub_id=ub_id,
+                    user_id=0,
+                    block_id=block_id,
+                    text=user_text,
+                    user_files=user_files,
+                    created_at=created_at_ms
+                )
+                air_id = air_record.get("id")
+
+                if air_id and ai_text:
+                    await xano.update_air_message(
+                        air_id=air_id,
+                        ai_content=[{"text": ai_text}],
+                        status="completed"
+                    )
+
+            migrated += 1
+
+        except Exception as e:
+            errors.append({"ub_id": ub_id, "error": str(e)})
+
+    return {
+        "migrated": migrated,
+        "skipped": skipped,
+        "errors": errors,
+        "message": f"Migration complete: {migrated} migrated, {skipped} already had air records"
+    }
 
 
 @app.get("/usage/course/{course_id}")

@@ -54,7 +54,16 @@ class XanoClient:
                 if data and not data.get('error'):
                     data['questions'] = json.loads(data['questions']) if isinstance(data.get('questions'), str) else data.get('questions', [])
                     data['answers'] = json.loads(data['answers']) if isinstance(data.get('answers'), str) else data.get('answers', [])
-                    data['custom_data'] = json.loads(data['custom_data']) if isinstance(data.get('custom_data'), str) else data.get('custom_data', {})
+                    raw_cd = data.get('custom_data')
+                    if isinstance(raw_cd, str) and raw_cd.strip():
+                        try:
+                            data['custom_data'] = json.loads(raw_cd)
+                        except Exception:
+                            data['custom_data'] = {}
+                    elif isinstance(raw_cd, dict):
+                        data['custom_data'] = raw_cd
+                    else:
+                        data['custom_data'] = {}
                     return WorkflowState(**data)
         except Exception as e:
             print(f"Error loading workflow state: {e}")
@@ -70,7 +79,6 @@ class XanoClient:
             "block_id": state.block_id,
             "current_question_index": state.current_question_index,
             "questions": json.dumps(state.questions, ensure_ascii=False),
-            "answers": json.dumps(state.answers, ensure_ascii=False),
             "follow_up_count": state.follow_up_count,
             "max_follow_ups": state.max_follow_ups,
             "status": state.status,
@@ -79,6 +87,74 @@ class XanoClient:
         response = await self.client.post(f"{self.base_url}/save_workflow_state", json=data)
         return response.json() if response.status_code in [200, 201] else None
     
+    async def get_air_history(self, ub_id: int) -> List[Dict[str, Any]]:
+        try:
+            response = await self.client.get(f"{self.base_url}/air/history", params={"ub_id": ub_id})
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list):
+                    return data
+                if isinstance(data, dict):
+                    return data.get("items", data.get("data", []))
+        except Exception as e:
+            print(f"Error loading air history: {e}")
+        return []
+
+    async def add_air_message(self, ub_id: int, user_id: int, block_id: int, text: str, user_files: List[Dict] = [], created_at: Optional[int] = None) -> Dict[str, Any]:
+        data = {
+            "ub_id": ub_id,
+            "user_id": user_id,
+            "block_id": block_id,
+            "text": text,
+            "user_files": user_files,
+            "status": "new"
+        }
+        if created_at is not None:
+            data["created_at"] = created_at
+        try:
+            response = await self.client.post(f"{self.base_url}/add_air", json=data)
+            if response.status_code in [200, 201]:
+                return response.json()
+        except Exception as e:
+            print(f"Error adding air message: {e}")
+        return {}
+
+    async def update_air_message(self, air_id: int, ai_content: List[Dict], status: str = "completed") -> Dict[str, Any]:
+        data = {
+            "id": air_id,
+            "ai_content": ai_content,
+            "status": status
+        }
+        try:
+            response = await self.client.patch(f"{self.base_url}/update_air", json=data)
+            if response.status_code in [200, 201]:
+                return response.json()
+        except Exception as e:
+            print(f"Error updating air message: {e}")
+        return {}
+
+    async def get_all_workflow_states_with_answers(self) -> List[Dict[str, Any]]:
+        """Returns all workflow_state records that still have non-empty answers (pre-migration data)."""
+        try:
+            response = await self.client.get(f"{self.base_url}/workflow_state")
+            if response.status_code == 200:
+                data = response.json()
+                items = data if isinstance(data, list) else data.get("items", data.get("data", []))
+                result = []
+                for item in items:
+                    raw = item.get("answers", "[]")
+                    try:
+                        answers = json.loads(raw) if isinstance(raw, str) else (raw or [])
+                    except Exception:
+                        answers = []
+                    if answers:
+                        item["_parsed_answers"] = answers
+                        result.append(item)
+                return result
+        except Exception as e:
+            print(f"Error getting all workflow states: {e}")
+        return []
+
     async def get_messages(self, ub_id: int) -> List[Dict[str, Any]]:
         response = await self.client.get(f"{self.base_url}/air", params={"ub_id": ub_id})
         response.raise_for_status()
