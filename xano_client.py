@@ -299,6 +299,7 @@ class XanoClient:
         
         if status:
             update_data["status"] = status.value
+            update_data["set_status"] = True
         
         if grade is not None:
             update_data["work_summary"] = grade
