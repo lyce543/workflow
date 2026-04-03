@@ -189,6 +189,11 @@ include_all_children: {ctx.include_all_children}
             session = await xano.get_chat_session(ub_id)
             user_id = session.get("user_id") or 0
 
+            air_records = await xano.get_air_history(ub_id)
+            print(f"DEBUG memory_agent: air_records count={len(air_records)}")
+            conversation_history = self._convert_air_to_history(air_records)
+            print(f"DEBUG memory_agent: conversation_history turns={len(conversation_history)}, first_user_msg={conversation_history[0].get('user_message','')[:50] if conversation_history else 'EMPTY'}")
+
             context = MemoryAgentContext(
                 course_id=course_id,
                 lesson_id=lesson_id,
@@ -200,13 +205,13 @@ include_all_children: {ctx.include_all_children}
                 writing_instructions=specs.get("writing_user_data_instructions", "When the user mentions a fact about themselves, write it on course level."),
                 agent_instructions=block.get("int_instructions", "You are a helpful agent."),
                 agent_specifications=specs.get("agent_specifications", ""),
-                conversation_history=state.answers
+                conversation_history=conversation_history
             )
 
             model = template.get("model", "gpt-4o")
             agent = self._create_agent(context, model)
 
-            agent_input = await self._build_input(user_message, user_files, state.answers)
+            agent_input = await self._build_input(user_message, user_files, conversation_history)
             result = Runner.run_streamed(agent, agent_input, context=context)
 
             full_response = ""
@@ -216,12 +221,6 @@ include_all_children: {ctx.include_all_children}
                     full_response += chunk
                     yield chunk
 
-            state.answers.append({
-                "turn": len(state.answers) + 1,
-                "user_message": user_message,
-                "agent_response": full_response,
-                "timestamp": datetime.now().isoformat()
-            })
             await xano.save_workflow_state(state)
 
     async def run_evaluation(
