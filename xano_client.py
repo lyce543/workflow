@@ -328,7 +328,8 @@ class XanoClient:
         
         try:
             print(f"Updating UB {ub_id} with data keys: {list(update_data.keys())}")
-            response = await self.client.post(f"{self.base_url}/update_ub", json=update_data)
+            endpoint = "/update_ub" if "status" in update_data else "/save_evaluation"
+            response = await self.client.post(f"{self.base_url}{endpoint}", json=update_data)
             if response.status_code in [200, 201]:
                 result = response.json()
                 print(f"Update UB successful: {result}")
