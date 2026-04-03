@@ -190,9 +190,10 @@ include_all_children: {ctx.include_all_children}
             user_id = session.get("user_id") or 0
 
             air_records = await xano.get_air_history(ub_id)
-            print(f"DEBUG memory_agent: air_records count={len(air_records)}")
             conversation_history = self._convert_air_to_history(air_records)
-            print(f"DEBUG memory_agent: conversation_history turns={len(conversation_history)}, first_user_msg={conversation_history[0].get('user_message','')[:50] if conversation_history else 'EMPTY'}")
+            # Remove last turn if agent hasn't responded yet (current in-flight message)
+            if conversation_history and not conversation_history[-1].get('agent_response'):
+                conversation_history = conversation_history[:-1]
 
             context = MemoryAgentContext(
                 course_id=course_id,
