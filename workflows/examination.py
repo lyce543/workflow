@@ -281,10 +281,13 @@ If follow_up_count >= max, set needs_clarification=false even if incomplete."""
                 criteria_text = ""
                 for i, crit in enumerate(ctx.criteria):
                     criteria_text += f"\n## Criterion {i+1}"
-                    if crit.get('name'):
-                        criteria_text += f": {crit['name']}"
-                    criteria_text += f"\n- Description: {crit.get('description', 'No description')}"
-                    criteria_text += f"\n- Max points: {crit.get('max_points', 10)}"
+                    if crit.get('criterion_name'):
+                        criteria_text += f": {crit['criterion_name']}"
+                    criteria_text += f"\nMax Points: {crit.get('max_points', 0)}\n"
+                    if crit.get('summary_instructions'):
+                        criteria_text += f"Summary Instructions: {crit['summary_instructions']}\n"
+                    if crit.get('grading_instructions'):
+                        criteria_text += f"Grading Instructions: {crit['grading_instructions']}\n"
                     criteria_text += "\n"
 
                 answers_text = ""
