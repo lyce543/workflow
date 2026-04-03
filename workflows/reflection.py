@@ -211,40 +211,40 @@ Fill the template with collected data. Be concise and structured."""
             specs = specifications[0] if specifications else {}
 
             state = await self.load_or_create_state(ub_id, block["id"], specifications, xano)
-            
+
             if state.status == "finished":
                 yield "Reflection session завершено. Дякую!"
                 return
-            
+
+            air_records = await xano.get_air_history(ub_id)
+            state.answers = self._convert_air_to_history(air_records)
+
             context = WorkflowContext(state=state)
-            
+
             if not state.custom_data.get('phase'):
                 state.custom_data['phase'] = 'aspiration'
+            if 'aspiration' not in state.custom_data:
                 state.custom_data['aspiration'] = {}
+            if 'strengths' not in state.custom_data:
                 state.custom_data['strengths'] = {}
+            if 'feed_forward' not in state.custom_data:
                 state.custom_data['feed_forward'] = {}
-            
+
             coach = self.create_coach_agent(context, specs, template.get("model", "gpt-4o"))
             result = Runner.run_streamed(coach, user_message, context=context)
-            
+
             full_response = ""
             async for event in result.stream_events():
                 if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
                     chunk = event.data.delta
                     full_response += chunk
                     yield chunk
-            
-            state.answers.append({
-                "user_message": user_message,
-                "coach_response": full_response,
-                "timestamp": datetime.now().isoformat(),
-                "phase": state.custom_data.get('phase', 'aspiration')
-            })
-            
+
             self._update_phase_and_data(state, user_message, full_response, specs)
-            
+
+            print(f"DEBUG reflection save: phase={state.custom_data.get('phase')}, answers={len(state.answers)}, custom_data_keys={list(state.custom_data.keys())}")
             await xano.save_workflow_state(state)
-            
+
             if state.status == "finished":
                 from models import ChatStatus
                 await xano.update_chat_status(ub_id, status=ChatStatus.FINISHED)
