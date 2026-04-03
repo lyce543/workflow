@@ -187,7 +187,7 @@ async def process_student_message(message: StudentMessage):
 async def evaluate_chat(ub_id: int):
     try:
         session = await xano.get_chat_session(ub_id)
-        
+
         if session.get('work_summary'):
             return {
                 "evaluation": session['work_summary'],
@@ -328,7 +328,7 @@ async def evaluate_lesson_tests(lesson_id: int):
 
 
 @app.get("/chat/{ub_id}/state")
-async def get_chat_state(ub_id: int):
+async def get_chat_state(ub_id: int, offset: int = 0, limit: int = 10):
     try:
         import json as _json
 
@@ -348,21 +348,27 @@ async def get_chat_state(ub_id: int):
                         pass
                 return value if value is not None else fallback
 
-            answers = []
+            all_answers = []
             for r in air_records:
                 uc = _parse(r.get("user_content"), {})
                 ac = _parse(r.get("ai_content"), [])
                 uf = _parse(r.get("user_files"), [])
                 user_text = uc.get("text", "") if isinstance(uc, dict) else ""
                 ai_text = ac[0].get("text", "") if isinstance(ac, list) and ac else ""
-                answers.append({
+                all_answers.append({
                     "user_message": user_text,
                     "agent_response": ai_text,
                     "user_files": uf if isinstance(uf, list) else [],
                     "timestamp": r.get("created_at", "")
                 })
         else:
-            answers = workflow_state.answers
+            all_answers = workflow_state.answers
+
+        total = len(all_answers)
+        # повертаємо з кінця: offset=0 → останні limit повідомлень
+        start = max(0, total - limit - offset)
+        end = max(0, total - offset)
+        answers = all_answers[start:end]
 
         return {
             "ub_id": workflow_state.ub_id,
@@ -370,6 +376,8 @@ async def get_chat_state(ub_id: int):
             "current_question_index": workflow_state.current_question_index,
             "questions": workflow_state.questions,
             "answers": answers,
+            "total": total,
+            "has_more": start > 0,
             "follow_up_count": workflow_state.follow_up_count,
             "max_follow_ups": workflow_state.max_follow_ups,
             "status": workflow_state.status,
