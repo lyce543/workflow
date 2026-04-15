@@ -104,10 +104,27 @@ class XanoClient:
                 if isinstance(data, list):
                     return data
                 if isinstance(data, dict):
-                    return data.get("items", data.get("data", []))
+                    return data.get("items", data.get("records", data.get("data", [])))
         except Exception as e:
             print(f"Error loading air history: {e}")
         return []
+
+    async def get_air_history_page(self, ub_id: int, per_page: int, page: int) -> tuple:
+        """Returns (records, total_pages) using Xano pagination. Requires paginated endpoint."""
+        try:
+            params = {"ub_id": ub_id, "per_page": per_page, "page": page}
+            response = await self.client.get(f"{self.base_url}/air/history", params=params)
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict):
+                    records = data.get("items", data.get("records", data.get("data", [])))
+                    page_total = data.get("pageTotal", data.get("page_total"))
+                    return records, page_total
+                if isinstance(data, list):
+                    return data, None
+        except Exception as e:
+            print(f"Error loading air history page: {e}")
+        return [], None
 
     async def add_air_message(self, ub_id: int, user_id: int, block_id: int, text: str, user_files: List[Dict] = [], created_at: Optional[int] = None) -> Dict[str, Any]:
         data = {

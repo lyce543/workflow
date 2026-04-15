@@ -337,38 +337,43 @@ async def get_chat_state(ub_id: int, offset: int = 0, limit: int = 10):
         if not workflow_state:
             raise HTTPException(status_code=404, detail="No workflow state found")
 
-        air_records = await xano.get_air_history(ub_id)
+        def _parse(value, fallback):
+            if isinstance(value, str):
+                try:
+                    return _json.loads(value)
+                except Exception:
+                    pass
+            return value if value is not None else fallback
+
+        def _to_answer(r):
+            uc = _parse(r.get("user_content"), {})
+            ac = _parse(r.get("ai_content"), [])
+            uf = _parse(r.get("user_files"), [])
+            return {
+                "user_message": uc.get("text", "") if isinstance(uc, dict) else "",
+                "agent_response": ac[0].get("text", "") if isinstance(ac, list) and ac else "",
+                "user_files": uf if isinstance(uf, list) else [],
+                "timestamp": r.get("created_at", "")
+            }
+
+        # Xano sorts DESC so page 1 = newest messages
+        # page = which block of `limit` messages from the newest end
+        page = offset // limit + 1
+        air_records, page_total = await xano.get_air_history_page(ub_id, per_page=limit, page=page)
 
         if air_records:
-            def _parse(value, fallback):
-                if isinstance(value, str):
-                    try:
-                        return _json.loads(value)
-                    except Exception:
-                        pass
-                return value if value is not None else fallback
-
-            all_answers = []
-            for r in air_records:
-                uc = _parse(r.get("user_content"), {})
-                ac = _parse(r.get("ai_content"), [])
-                uf = _parse(r.get("user_files"), [])
-                user_text = uc.get("text", "") if isinstance(uc, dict) else ""
-                ai_text = ac[0].get("text", "") if isinstance(ac, list) and ac else ""
-                all_answers.append({
-                    "user_message": user_text,
-                    "agent_response": ai_text,
-                    "user_files": uf if isinstance(uf, list) else [],
-                    "timestamp": r.get("created_at", "")
-                })
+            # records came in DESC order — reverse to chronological for display
+            answers = [_to_answer(r) for r in reversed(air_records)]
+            has_more = page_total is not None and page < page_total
         else:
+            # fallback: no paginated support yet, use workflow state answers
             all_answers = workflow_state.answers
-
-        total = len(all_answers)
-        # повертаємо з кінця: offset=0 → останні limit повідомлень
-        start = max(0, total - limit - offset)
-        end = max(0, total - offset)
-        answers = all_answers[start:end]
+            total = len(all_answers)
+            start = max(0, total - limit - offset)
+            end = max(0, total - offset)
+            answers = all_answers[start:end]
+            has_more = start > 0
+            page_total = None
 
         return {
             "ub_id": workflow_state.ub_id,
@@ -376,8 +381,8 @@ async def get_chat_state(ub_id: int, offset: int = 0, limit: int = 10):
             "current_question_index": workflow_state.current_question_index,
             "questions": workflow_state.questions,
             "answers": answers,
-            "total": total,
-            "has_more": start > 0,
+            "total": (page_total * limit) if page_total else len(answers),
+            "has_more": has_more,
             "follow_up_count": workflow_state.follow_up_count,
             "max_follow_ups": workflow_state.max_follow_ups,
             "status": workflow_state.status,
