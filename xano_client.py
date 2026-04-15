@@ -119,6 +119,8 @@ class XanoClient:
                 if isinstance(data, dict):
                     records = data.get("items", data.get("records", data.get("data", [])))
                     page_total = data.get("pageTotal", data.get("page_total"))
+                    if page_total is None and data.get("nextPage") is not None:
+                        page_total = page + 1
                     return records, page_total
                 if isinstance(data, list):
                     return data, None
