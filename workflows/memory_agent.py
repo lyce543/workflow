@@ -12,6 +12,9 @@ from .base import BaseWorkflow, WorkflowContext, WorkflowState, EvaluationContex
 
 MCP_SERVER_URL = "https://xxye-mqg7-lvux.n7d.xano.io/x2/mcp/Kla8XVg_/mcp/stream"
 
+CHUNK_SIZE = 7
+RECENT_TURNS = 7
+
 
 class MemoryAgentContext:
     def __init__(
@@ -26,7 +29,8 @@ class MemoryAgentContext:
         writing_instructions: str,
         agent_instructions: str,
         agent_specifications: str,
-        conversation_history: List[Dict[str, Any]]
+        conversation_history: List[Dict[str, Any]],
+        chunk_summaries: List[str] = []
     ):
         self.course_id = course_id
         self.lesson_id = lesson_id
@@ -39,6 +43,7 @@ class MemoryAgentContext:
         self.agent_instructions = agent_instructions
         self.agent_specifications = agent_specifications
         self.conversation_history = conversation_history
+        self.chunk_summaries = chunk_summaries
 
 
 class MemoryAgentWorkflow(BaseWorkflow):
@@ -57,13 +62,19 @@ class MemoryAgentWorkflow(BaseWorkflow):
         def agent_instructions(run_context: RunContextWrapper[MemoryAgentContext], _agent: Agent):
             ctx = run_context.context
 
-            conversation_history = ""
+            history_section = ""
+            if ctx.chunk_summaries:
+                history_section += "\n\n# SUMMARY OF EARLIER CONVERSATION:\n"
+                for i, summary in enumerate(ctx.chunk_summaries, 1):
+                    history_section += f"\n[Part {i}]\n{summary}\n"
+
             if ctx.conversation_history:
-                conversation_history = "\n\n# CONVERSATION HISTORY:\n"
+                label = "# RECENT CONVERSATION:" if ctx.chunk_summaries else "# CONVERSATION HISTORY:"
+                history_section += f"\n\n{label}\n"
                 for i, turn in enumerate(ctx.conversation_history, 1):
-                    conversation_history += f"\nTurn {i}:\n"
-                    conversation_history += f"Student: {turn.get('user_message', '')}\n"
-                    conversation_history += f"You: {turn.get('agent_response', '')}\n"
+                    history_section += f"\nTurn {i}:\n"
+                    history_section += f"Student: {turn.get('user_message', '')}\n"
+                    history_section += f"You: {turn.get('agent_response', '')}\n"
 
             return f"""Use these inputs when calling the MCP server:
 course_id: {ctx.course_id}
@@ -85,7 +96,7 @@ include_all_children: {ctx.include_all_children}
 # Specifications
 {ctx.agent_specifications}
 
-{conversation_history}"""
+{history_section}"""
 
         return Agent[MemoryAgentContext](
             name="MemoryAgent",
@@ -158,6 +169,63 @@ include_all_children: {ctx.include_all_children}
             return [{"role": "user", "content": content}]
         return user_message
 
+    async def _summarize_turns(self, turns: List[Dict], block_context: str = "") -> str:
+        from openai import OpenAI
+        client = OpenAI(api_key=self.openai_api_key)
+        conversation_text = ""
+        for i, turn in enumerate(turns, 1):
+            conversation_text += f"Turn {i}:\nStudent: {turn.get('user_message', '')}\nAssistant: {turn.get('agent_response', '')}\n\n"
+        context_hint = f"\nContext about this conversation: {block_context[:300]}\n" if block_context else ""
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"""You compress conversation history into concise summaries for an AI agent.{context_hint}
+Preserve: key facts established, topics discussed, decisions made, relationship dynamics, important details (numbers, names, agreements), open questions."""
+                },
+                {
+                    "role": "user",
+                    "content": f"Summarize these conversation turns in max 150 words:\n\n{conversation_text}"
+                }
+            ],
+            max_tokens=250
+        )
+        return response.choices[0].message.content.strip()
+
+    async def _get_chunk_summaries(
+        self,
+        old_turns: List[Dict],
+        state: WorkflowState,
+        xano,
+        block_context: str = ""
+    ) -> tuple:
+        if not old_turns:
+            return [], []
+
+        chunk_summaries = list(state.custom_data.get('chunk_summaries', []))
+        updated = False
+        num_complete_chunks = len(old_turns) // CHUNK_SIZE
+
+        for i in range(num_complete_chunks):
+            if i < len(chunk_summaries):
+                continue
+            chunk_turns = old_turns[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
+            try:
+                summary = await self._summarize_turns(chunk_turns, block_context)
+                chunk_summaries.append(summary)
+                updated = True
+            except Exception as e:
+                print(f"Summary generation failed for chunk {i}: {e}")
+                break
+
+        if updated:
+            state.custom_data['chunk_summaries'] = chunk_summaries
+            await xano.save_workflow_state(state)
+
+        partial_turns = old_turns[num_complete_chunks * CHUNK_SIZE:]
+        return chunk_summaries, partial_turns
+
     async def run_workflow_stream(
         self,
         block: Dict,
@@ -191,9 +259,21 @@ include_all_children: {ctx.include_all_children}
 
             air_records = await xano.get_air_history(ub_id)
             conversation_history = self._convert_air_to_history(air_records)
-            # Remove last turn if agent hasn't responded yet (current in-flight message)
             if conversation_history and not conversation_history[-1].get('agent_response'):
                 conversation_history = conversation_history[:-1]
+
+            if len(conversation_history) > RECENT_TURNS:
+                old_turns = conversation_history[:-RECENT_TURNS]
+                recent_turns = conversation_history[-RECENT_TURNS:]
+            else:
+                old_turns = []
+                recent_turns = conversation_history
+
+            block_context = block.get("int_instructions", "")[:300]
+            chunk_summaries, partial_turns = await self._get_chunk_summaries(
+                old_turns, state, xano, block_context
+            )
+            verbatim_turns = partial_turns + recent_turns
 
             context = MemoryAgentContext(
                 course_id=course_id,
@@ -206,13 +286,14 @@ include_all_children: {ctx.include_all_children}
                 writing_instructions=specs.get("writing_user_data_instructions", "When the user mentions a fact about themselves, write it on course level."),
                 agent_instructions=block.get("int_instructions", "You are a helpful agent."),
                 agent_specifications=specs.get("agent_specifications", ""),
-                conversation_history=conversation_history
+                conversation_history=verbatim_turns,
+                chunk_summaries=chunk_summaries
             )
 
             model = template.get("model", "gpt-4o")
             agent = self._create_agent(context, model)
 
-            agent_input = await self._build_input(user_message, user_files, conversation_history)
+            agent_input = await self._build_input(user_message, user_files, verbatim_turns)
             result = Runner.run_streamed(agent, agent_input, context=context)
 
             full_response = ""
