@@ -188,7 +188,7 @@ async def evaluate_chat(ub_id: int):
     try:
         session = await xano.get_chat_session(ub_id)
 
-        if session.get('work_summary'):
+        if session.get('work_summary') and session.get('grading_output'):
             return {
                 "evaluation": session['work_summary'],
                 "timestamp": datetime.now().isoformat(),
@@ -261,6 +261,9 @@ async def evaluate_chat(ub_id: int):
         
         workflow = workflow_class(Config.OPENAI_API_KEY)
         
+        if not workflow_state.answers:
+            raise HTTPException(status_code=400, detail="No conversation history to evaluate")
+
         evaluation_text = await workflow.run_evaluation(
             ub_id=ub_id,
             workflow_state=workflow_state,
@@ -268,9 +271,9 @@ async def evaluate_chat(ub_id: int):
             criteria=criteria,
             model=block.get("model", "gpt-4o")
         )
-        
+
         print(f"Saving evaluation to Xano via update_ub endpoint...")
-        
+
         update_result = await xano.update_chat_status(ub_id, grade=evaluation_text)
         
         if update_result:
