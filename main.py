@@ -207,8 +207,10 @@ async def evaluate_chat(ub_id: int):
         if not workflow_state:
             raise HTTPException(status_code=404, detail="No workflow state found")
 
-        # Підставляємо історію з air для евалуейшну
         air_records = await xano.get_air_history(ub_id)
+        print(f"Air records for ub_id={ub_id}: {len(air_records)} records")
+        if not air_records and not workflow_state.answers:
+            raise HTTPException(status_code=404, detail="No conversation history to evaluate")
         if air_records:
             import json as _json
 
@@ -261,9 +263,6 @@ async def evaluate_chat(ub_id: int):
         
         workflow = workflow_class(Config.OPENAI_API_KEY)
         
-        if not workflow_state.answers:
-            raise HTTPException(status_code=400, detail="No conversation history to evaluate")
-
         evaluation_text = await workflow.run_evaluation(
             ub_id=ub_id,
             workflow_state=workflow_state,
