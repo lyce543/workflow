@@ -98,7 +98,7 @@ class XanoClient:
     
     async def get_air_history(self, ub_id: int) -> List[Dict[str, Any]]:
         try:
-            response = await self.client.get(f"{self.base_url}/air/history", params={"ub_id": ub_id})
+            response = await self.client.get(f"{self.base_url}/air/history", params={"ub_id": ub_id, "per_page": 1000, "page": 1})
             if response.status_code == 200:
                 data = response.json()
                 if isinstance(data, list):
