@@ -258,7 +258,7 @@ Preserve: key facts established, topics discussed, decisions made, relationship 
             user_id = session.get("user_id") or 0
 
             air_records = await xano.get_air_history(ub_id)
-            conversation_history = self._convert_air_to_history(air_records)
+            conversation_history = self._convert_air_to_history(list(reversed(air_records)))
             if conversation_history and not conversation_history[-1].get('agent_response'):
                 conversation_history = conversation_history[:-1]
 
